@@ -3,6 +3,7 @@ const net = require("node:net");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+const { loadPackagedRenderer } = require("./renderer-loader.cjs");
 const {
   app,
   BrowserWindow,
@@ -123,6 +124,36 @@ function startCatalogVerificationMonitor({ logger, stateStore }) {
   stopCatalogVerificationMonitor();
   const check = async () => {
     const current = stateStore.read();
+    if (current.integrationMode === "external-provider") {
+      if (current.codexCatalogVerified === true) {
+        stopCatalogVerificationMonitor();
+        return;
+      }
+      if (catalogVerificationInFlight || !runtimeHost) return;
+      catalogVerificationInFlight = true;
+      try {
+        const provider = await runtimeHost.externalProviderStatus();
+        if (!provider.active) return;
+        const state = stateStore.update({
+          codexCatalogVerified: true,
+          codexRestartRequired: false,
+        });
+        logger.info("external_provider.reverified", {
+          baseUrl: provider.baseUrl,
+          provider: provider.provider,
+          models: provider.verifiedModels,
+        });
+        send("launcher:state-changed", state);
+        stopCatalogVerificationMonitor();
+      } catch (error) {
+        logger.debug("external_provider.verification_pending", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        catalogVerificationInFlight = false;
+      }
+      return;
+    }
     if (current.coreSetupComplete !== true || current.codexCatalogVerified === true) {
       stopCatalogVerificationMonitor();
       return;
@@ -336,7 +367,7 @@ async function loadRenderer(window) {
     await window.loadURL(process.env.VITE_DEV_SERVER_URL);
     return;
   }
-  await window.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  await loadPackagedRenderer(window, path.join(__dirname, "..", "dist", "index.html"));
 }
 
 function validateLanguage(value) {
@@ -516,6 +547,9 @@ function registerIpc({ logger, stateStore }) {
   });
   handle("launcher:bridge-enabled", async (_event, enabled) => {
     if (IS_DEV_PROFILE) throw new Error("DEV profile has no Codex bridge route");
+    if (stateStore.read().integrationMode === "external-provider") {
+      throw new Error("Codex routing is managed by the verified external provider");
+    }
     const result = await runtimeHost.setBridgeEnabled(enabled === true);
     const state = stateStore.update({
       bridgeEnabled: result.active,
@@ -528,6 +562,9 @@ function registerIpc({ logger, stateStore }) {
   });
   handle("launcher:uninstall-integration", async () => {
     if (IS_DEV_PROFILE) throw new Error("DEV profile has no Codex integration to remove");
+    if (stateStore.read().integrationMode === "external-provider") {
+      throw new Error("Remove the external provider from its provider manager before removing this runtime");
+    }
     const language = stateStore.read().language;
     const chinese = language === "zh-CN";
     const confirmation = await dialog.showMessageBox(mainWindow, {
@@ -553,6 +590,7 @@ function registerIpc({ logger, stateStore }) {
     const state = stateStore.update({
       coreSetupComplete: false,
       bridgeEnabled: false,
+      integrationMode: "direct",
       codexCatalogVerified: false,
       mcpSetupComplete: false,
       mcpRuntimeInstalled: false,
@@ -581,12 +619,16 @@ function registerIpc({ logger, stateStore }) {
           : "Run the browser smoke test before installing the Codex integration",
       );
     }
-    const result = IS_DEV_PROFILE ? await runtimeHost.setupDevCore() : await runtimeHost.setupCore();
+    const externalProvider = !IS_DEV_PROFILE && stateStore.read().integrationMode === "external-provider";
+    const result = IS_DEV_PROFILE
+      ? await runtimeHost.setupDevCore()
+      : await runtimeHost.setupCore({ externalProvider });
     stateStore.update({
-      bridgeEnabled: IS_DEV_PROFILE ? false : true,
+      bridgeEnabled: IS_DEV_PROFILE || externalProvider ? false : true,
+      integrationMode: externalProvider ? "external-provider" : "direct",
       coreSetupComplete: true,
-      codexCatalogVerified: IS_DEV_PROFILE ? true : false,
-      codexRestartRequired: IS_DEV_PROFILE ? false : true,
+      codexCatalogVerified: IS_DEV_PROFILE || externalProvider ? true : false,
+      codexRestartRequired: IS_DEV_PROFILE || externalProvider ? false : true,
       ...(result.mode === "full" ? {
         mcpRuntimeInstalled: true,
         mcpSetupComplete: false,
@@ -603,7 +645,7 @@ function registerIpc({ logger, stateStore }) {
       });
     });
     if (!IS_DEV_PROFILE) startCatalogVerificationMonitor({ logger, stateStore });
-    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE };
+    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE && !externalProvider };
   });
   handle("launcher:setup-mcp", async (_event, input) => {
     await browserHost.reveal();
@@ -614,12 +656,13 @@ function registerIpc({ logger, stateStore }) {
       tunnelId: typeof input?.tunnelId === "string" ? input.tunnelId.trim() : "",
       runtimeKey: typeof input?.runtimeKey === "string" ? input.runtimeKey : "",
       replace: input?.replace === true,
+      externalProvider: !IS_DEV_PROFILE && stateStore.read().integrationMode === "external-provider",
     });
     stateStore.update({
       mcpRuntimeInstalled: true,
       mcpSetupComplete: false,
       mcpGuideStep: 2,
-      codexRestartRequired: IS_DEV_PROFILE ? false : true,
+      codexRestartRequired: IS_DEV_PROFILE || stateStore.read().integrationMode === "external-provider" ? false : true,
     });
     return { ok: true, stdout: result.stdout };
   });
@@ -639,10 +682,11 @@ function registerIpc({ logger, stateStore }) {
   });
   handle("launcher:bigger-context", async (_event, enabled) => {
     const result = await runtimeHost.setBiggerContext(enabled === true);
+    const externalProvider = !IS_DEV_PROFILE && stateStore.read().integrationMode === "external-provider";
     const state = stateStore.update({
       experimentalBiggerContext: result.enabled,
-      codexCatalogVerified: IS_DEV_PROFILE ? true : false,
-      codexRestartRequired: IS_DEV_PROFILE ? false : true,
+      codexCatalogVerified: IS_DEV_PROFILE || externalProvider ? true : false,
+      codexRestartRequired: IS_DEV_PROFILE || externalProvider ? false : true,
     });
     send("launcher:state-changed", state);
     if (!IS_DEV_PROFILE) startCatalogVerificationMonitor({ logger, stateStore });
@@ -972,13 +1016,46 @@ async function start() {
     }
     try {
       const route = await runtimeHost.bridgeStatus();
-      if (route.installed) {
+      const provider = route.active ? { active: false, reason: "direct-route-active" } : await runtimeHost.externalProviderStatus();
+      const integrationMode = require("./external-provider.cjs").resolveIntegrationMode({ route, provider });
+      if (integrationMode === "direct") {
         const current = stateStore.read();
-        if (current.bridgeEnabled !== route.active) {
-          const state = stateStore.update({ bridgeEnabled: route.active });
+        if (current.bridgeEnabled !== route.active || current.integrationMode !== "direct") {
+          const state = stateStore.update({ bridgeEnabled: route.active, integrationMode: "direct" });
           send("launcher:state-changed", state);
         }
-        if (!route.active) return { status: "bridge-disabled" };
+      } else if (integrationMode === "external-provider") {
+        const current = stateStore.read();
+        const patch = {
+          integrationMode: "external-provider",
+          bridgeEnabled: false,
+          coreSetupComplete: true,
+          codexCatalogVerified: true,
+          codexRestartRequired: false,
+        };
+        if (Object.entries(patch).some(([key, value]) => current[key] !== value)) {
+          const state = stateStore.update(patch);
+          send("launcher:state-changed", state);
+        }
+        logger.info("external_provider.verified", {
+          baseUrl: provider.baseUrl,
+          provider: provider.provider,
+          models: provider.verifiedModels,
+        });
+      } else if (integrationMode === "direct-disabled") {
+        const current = stateStore.read();
+        if (current.bridgeEnabled !== false || current.integrationMode !== "direct") {
+          const state = stateStore.update({ bridgeEnabled: false, integrationMode: "direct" });
+          send("launcher:state-changed", state);
+        }
+        return { status: "bridge-disabled" };
+      } else {
+        const current = stateStore.read();
+        if (current.integrationMode === "external-provider" && current.codexCatalogVerified !== false) {
+          const state = stateStore.update({ codexCatalogVerified: false });
+          send("launcher:state-changed", state);
+          logger.warn("external_provider.unavailable", { reason: provider.reason });
+        }
       }
     } catch (error) {
       logger.warn("bridge.route_status_failed", {
