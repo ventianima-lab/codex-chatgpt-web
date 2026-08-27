@@ -9,6 +9,7 @@ import { tunnelStatus } from "./tunnel";
 import { getTunnelServiceStatus } from "./tunnel-service";
 import { inspectLauncherBrowserHost, readLauncherBrowserHostDescriptor } from "./launcher-browser-host";
 import { processRunning } from "./process";
+import { inspectExternalProvider, type ExternalProviderInspection } from "./external-provider";
 
 export type CheckStatus = "ok" | "warning" | "error";
 
@@ -23,6 +24,41 @@ export interface DoctorReport {
   ok: boolean;
   mode?: AppConfig["mode"];
   checks: DoctorCheck[];
+}
+
+export function codexRouteCheck(
+  config: Pick<AppConfig, "codexIntegrationMode">,
+  codex: { installed: boolean; errors: string[] },
+  externalProvider?: ExternalProviderInspection,
+): DoctorCheck {
+  if (config.codexIntegrationMode === "external-provider") {
+    if (externalProvider?.active !== true) {
+      return {
+        id: "codex",
+        status: "error",
+        message: "External Codex provider model catalog is unavailable",
+        detail: externalProvider?.reason || "external-provider-not-verified",
+      };
+    }
+    return {
+      id: "codex",
+      status: "ok",
+      message: "Codex model routing is delegated to a live verified external provider",
+      detail: externalProvider.verifiedModels?.join(", "),
+    };
+  }
+  if (!codex.installed) {
+    return { id: "codex", status: "error", message: "Codex model route is not installed" };
+  }
+  if (codex.errors.length > 0) {
+    return {
+      id: "codex",
+      status: "error",
+      message: "Codex integration is inconsistent",
+      detail: codex.errors.join("; "),
+    };
+  }
+  return { id: "codex", status: "ok", message: "Codex native model route is installed" };
 }
 
 function secureFile(path: string): boolean {
@@ -138,14 +174,10 @@ export async function runDoctor(): Promise<DoctorReport> {
     }
   }
 
-  const codex = inspectCodexIntegration();
-  if (!codex.installed) {
-    checks.push({ id: "codex", status: "error", message: "Codex model route is not installed" });
-  } else if (codex.errors.length > 0) {
-    checks.push({ id: "codex", status: "error", message: "Codex integration is inconsistent", detail: codex.errors.join("; ") });
-  } else {
-    checks.push({ id: "codex", status: "ok", message: "Codex native model route is installed" });
-  }
+  const externalProvider = config.codexIntegrationMode === "external-provider"
+    ? await inspectExternalProvider(config)
+    : undefined;
+  checks.push(codexRouteCheck(config, inspectCodexIntegration(), externalProvider));
 
   const service = getServiceStatus();
   if (config.browserHost === "launcher") {
