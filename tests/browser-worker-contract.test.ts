@@ -997,14 +997,18 @@ test("effort selection handles the known ChatGPT rate-limit dialog before backgr
   const selectionEnd = workerSource.indexOf("private async activeComposer", selectionStart);
   const selectionSource = workerSource.slice(selectionStart, selectionEnd);
   const guard = selectionSource.indexOf("throwIfChatGptRateLimitDialog(page)");
-  const activation = selectionSource.indexOf("currentEffort.click({ force: true })");
+  const activation = selectionSource.indexOf("this.activateEffortControl(");
 
   expect(workerSource).toContain("Too many requests");
   expect(workerSource).toContain("making requests too quickly");
   expect(guard).toBeGreaterThan(-1);
   expect(activation).toBeGreaterThan(guard);
   expect(selectionSource).not.toContain('currentEffort.press("Enter")');
-  expect(selectionSource).not.toContain("currentEffort.evaluate(");
+  expect(selectionSource).not.toContain("currentEffort.click(");
+  expect(selectionSource).toContain("effortControlCount !== 1");
+  expect(workerSource).toContain("element instanceof HTMLButtonElement");
+  expect(workerSource).toContain('element.getAttribute("aria-haspopup") !== "menu"');
+  expect(workerSource).toContain("element.click()");
   expect(selectionSource).toContain('effortChoice.press("Enter")');
   expect(selectionSource).not.toContain("effortChoice.click(");
   expect(selectionSource).not.toContain("is unavailable");
@@ -1257,7 +1261,9 @@ test("effort selection stops as soon as ChatGPT reports an expired session", asy
 test("effort menu waiting stops when ChatGPT reports an expired session", async () => {
   const neverVisible = new Promise<void>(() => {});
   const effortControl = {
+    filter() { return this; },
     last() { return this; },
+    count: async () => 1,
     waitFor: async () => {},
     getAttribute: async () => "true",
   };

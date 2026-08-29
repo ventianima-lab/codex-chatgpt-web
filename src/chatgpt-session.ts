@@ -11,6 +11,10 @@ export const CHATGPT_COMPOSER_SELECTOR = [
 export const CHATGPT_EFFORT_CONTROL_SELECTOR = [
   'button[aria-haspopup="menu"][data-tone="neutral"]:has([data-animated-slider-trigger="true"])',
   'button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]',
+  // Current ChatGPT builds expose the model/effort trigger as a neutral composer pill without
+  // either of the older identifying descendants. Selection code requires one unambiguous visible
+  // match and verifies the opened effort menu before it can submit anything.
+  'button[aria-haspopup="menu"][data-tone="neutral"]',
 ].join(", ");
 export const CHATGPT_EFFORT_MENU_SELECTOR = [
   '[data-testid="composer-intelligence-picker-content"]:has([role="menuitemradio"], [data-model-reasoning-effort-slider])',

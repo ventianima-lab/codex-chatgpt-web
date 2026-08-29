@@ -38,7 +38,7 @@ test("the effort selector identifies the model slider instead of any composer me
   expect(selectors).toContain(
     'button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]',
   );
-  expect(selectors).not.toContain('button[aria-haspopup="menu"][data-tone="neutral"]');
+  expect(selectors).toContain('button[aria-haspopup="menu"][data-tone="neutral"]');
   expect(selectors).not.toContain('button[aria-haspopup="menu"]');
 });
 
