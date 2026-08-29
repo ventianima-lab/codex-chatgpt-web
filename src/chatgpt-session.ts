@@ -145,17 +145,25 @@ export async function detectChatGptAccountCapabilities(
   if (!menuVisible && menuExpanded !== "true") await effortButton.press("Enter");
   try {
     const efforts = menu.locator(CHATGPT_EFFORT_ITEM_SELECTOR);
-    const slider = page.locator(CHATGPT_EFFORT_SLIDER_SELECTOR).filter({ visible: true }).last();
+    // A launcher-owned background WebContentsView can be 0x0 while the exact opened picker still
+    // contains one attached semantic slider. Capability proof therefore uses menu containment and
+    // ARIA state rather than viewport visibility.
+    const sliders = menu.locator(CHATGPT_EFFORT_SLIDER_SELECTOR);
+    const slider = sliders.last();
     const waitAbort = new AbortController();
     try {
       const ready = await Promise.race([
+        slider.waitFor({ state: "attached", timeout: 70_000, signal: waitAbort.signal })
+          .then(() => "slider" as const),
         efforts.first().waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal })
           .then(() => "items" as const),
-        slider.waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal })
-          .then(() => "slider" as const),
       ]);
       if (ready === "items") {
         return { solAvailable: true, proAvailable: await efforts.count() >= 5 };
+      }
+      const sliderCount = await sliders.count();
+      if (sliderCount !== 1) {
+        throw new Error(`ChatGPT effort menu exposed ${sliderCount} semantic sliders`);
       }
       const state = parseChatGptEffortSliderState(
         await slider.getAttribute("aria-valuemin"),

@@ -1296,13 +1296,19 @@ export class ChatGptBrowserWorker {
     await captureDiagnostic?.("effort-menu-open-requested");
     const effortChoices = effortMenu.locator(CHATGPT_EFFORT_ITEM_SELECTOR);
     const effortChoice = effortChoices.nth(uiEffortIndex);
-    const effortSlider = page.locator(CHATGPT_EFFORT_SLIDER_SELECTOR).filter({ visible: true }).last();
+    // The launcher deliberately leases a background WebContentsView with a 0x0 viewport.
+    // Current ChatGPT still attaches the authoritative ARIA slider inside the exact opened
+    // picker, but Playwright classifies it as not visible because the portal is clipped by that
+    // viewport. Scope the slider to the proven menu and wait for attachment; its bounded ARIA
+    // range is the selection authority, not screen geometry.
+    const effortSliders = effortMenu.locator(CHATGPT_EFFORT_SLIDER_SELECTOR);
+    const effortSlider = effortSliders.last();
     const waitAbort = new AbortController();
     let ready: "effort" | "slider" | "rate-limit" | "session-expired";
     try {
       ready = await Promise.race([
+        effortSlider.waitFor({ state: "attached", timeout: 70_000, signal: waitAbort.signal }).then(() => "slider" as const),
         effortChoice.waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal }).then(() => "effort" as const),
-        effortSlider.waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal }).then(() => "slider" as const),
         chatGptRateLimitDialog(page).waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal }).then(() => "rate-limit" as const),
         chatGptExpiredSessionAlert(page).waitFor({ state: "visible", timeout: 70_000, signal: waitAbort.signal }).then(() => "session-expired" as const),
       ]);
@@ -1315,13 +1321,21 @@ export class ChatGptBrowserWorker {
       await throwIfChatGptSessionFailureAlert(page);
       throw new ChatGptWebAdapterError(
         `ChatGPT effort menu did not expose item index ${uiEffortIndex}`
-        + `; item count: ${await effortChoices.count().catch(() => 0)}`,
+        + `; item count: ${await effortChoices.count().catch(() => 0)}`
+        + `; slider count: ${await effortSliders.count().catch(() => 0)}`,
         { status: 502, errorType: "server_error", code: "upstream_server_error", retryable: false },
       );
     } finally {
       waitAbort.abort();
     }
     if (ready === "slider") {
+      const sliderCount = await effortSliders.count();
+      if (sliderCount !== 1) {
+        throw new ChatGptWebAdapterError(
+          `ChatGPT effort menu exposed ${sliderCount} semantic sliders; refusing ambiguous selection`,
+          { status: 502, errorType: "server_error", code: "upstream_server_error", retryable: false },
+        );
+      }
       let sliderState = parseChatGptEffortSliderState(
         await effortSlider.getAttribute("aria-valuemin"),
         await effortSlider.getAttribute("aria-valuemax"),

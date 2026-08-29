@@ -99,3 +99,56 @@ test("a transient effort control does not turn a Luna-only account into Sol", as
   })).resolves.toEqual({ solAvailable: false, proAvailable: false });
   expect(visibilityReads).toBe(2);
 });
+
+test("capability detection accepts an attached clipped slider inside the exact picker", async () => {
+  const pressed: string[] = [];
+  const effortButton = {
+    last() { return this; },
+    isVisible: async () => true,
+    getAttribute: async (name: string) => name === "aria-expanded" ? "true" : null,
+  };
+  const composerForm = {
+    count: async () => 1,
+    locator: () => effortButton,
+  };
+  const composers = {
+    filter() { return this; },
+    last() { return this; },
+    count: async () => 1,
+    locator: () => composerForm,
+  };
+  const efforts = {
+    first() { return this; },
+    waitFor: async () => {},
+    count: async () => 2,
+  };
+  const slider = {
+    waitFor: async (options: { state: string }) => { expect(options.state).toBe("attached"); },
+    getAttribute: async (name: string) => ({
+      "aria-valuemin": "0",
+      "aria-valuemax": "4",
+      "aria-valuenow": "4",
+    }[name] ?? null),
+  };
+  const sliders = { last: () => slider, count: async () => 1 };
+  const menu = {
+    last() { return this; },
+    isVisible: async () => true,
+    locator: (selector: string) => selector.includes("data-model-reasoning-effort-slider")
+      ? sliders
+      : efforts,
+  };
+  const page = {
+    locator: (selector: string) => selector.includes("composer-intelligence-picker-content")
+      ? menu
+      : composers,
+    keyboard: { press: async (key: string) => { pressed.push(key); } },
+    evaluate: async () => true,
+  };
+
+  await expect(detectChatGptAccountCapabilities(page as never, {
+    selectorTimeoutMs: 100,
+    stableAbsenceMs: 0,
+  })).resolves.toEqual({ solAvailable: true, proAvailable: true });
+  expect(pressed).toEqual(["Escape"]);
+});

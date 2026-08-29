@@ -936,9 +936,82 @@ test("effort selection uses structural menu and slider indices instead of locali
   expect(workerSource).toContain('getAttribute("aria-expanded")');
   expect(workerSource).toContain('getAttribute("aria-valuenow")');
   expect(workerSource).toContain("sliderControl.press(key)");
+  expect(workerSource).toContain("effortMenu.locator(CHATGPT_EFFORT_SLIDER_SELECTOR)");
+  expect(workerSource).toContain('effortSlider.waitFor({ state: "attached"');
+  expect(workerSource).not.toContain('page.locator(CHATGPT_EFFORT_SLIDER_SELECTOR).filter({ visible: true })');
   expect(workerSource).not.toContain("currentLabel === targetLabel");
   expect(workerSource).not.toContain("chatGptEffortLabelsMatch");
   expect(workerSource).not.toMatch(/getByRole\("button", \{\s*name: "(?:Instant|Medium|High|Extra High|Pro)"/);
+});
+
+test("effort selection accepts one attached semantic slider in a zero-viewport picker", async () => {
+  const never = new Promise<void>(() => {});
+  const checkpoints: string[] = [];
+  const pressed: string[] = [];
+  const hidden = {
+    filter() { return this; },
+    last() { return this; },
+    isVisible: async () => false,
+    waitFor: async () => await never,
+  };
+  const effortControl = {
+    filter() { return this; },
+    last() { return this; },
+    count: async () => 1,
+    waitFor: async (options: { state: string }) => { expect(options.state).toBe("visible"); },
+    getAttribute: async (name: string) => name === "aria-expanded" ? "true" : null,
+  };
+  const composerForm = { locator: () => effortControl };
+  const composer = { locator: () => composerForm };
+  const effortChoice = { waitFor: async () => await never };
+  const effortChoices = { nth: () => effortChoice, count: async () => 2 };
+  const sliderControl = { press: async (key: string) => { pressed.push(key); } };
+  const effortSlider = {
+    waitFor: async (options: { state: string }) => { expect(options.state).toBe("attached"); },
+    getAttribute: async (name: string) => ({
+      "aria-valuemin": "0",
+      "aria-valuemax": "4",
+      "aria-valuenow": "4",
+    }[name] ?? null),
+    locator: () => sliderControl,
+  };
+  const effortSliders = { last: () => effortSlider, count: async () => 1 };
+  const effortMenu = {
+    last() { return this; },
+    isVisible: async () => true,
+    locator: (selector: string) => selector.includes("data-model-reasoning-effort-slider")
+      ? effortSliders
+      : effortChoices,
+  };
+  const page = {
+    locator: (selector: string) => {
+      if (selector.includes("composer-intelligence-picker-content")) return effortMenu;
+      return hidden;
+    },
+    keyboard: { press: async (key: string) => { pressed.push(key); } },
+  };
+  const selectModelAndEffort = (ChatGptBrowserWorker.prototype as unknown as {
+    selectModelAndEffort(
+      page: unknown,
+      modelId: string,
+      reasoning: string,
+      capabilities: { localToolsEnabled: boolean; solAvailable: boolean; proAvailable: boolean },
+      captureDiagnostic: (checkpoint: string) => Promise<void>,
+    ): Promise<{ displayLabel: string; uiEffortIndex: number | null }>;
+  }).selectModelAndEffort;
+
+  const mode = await selectModelAndEffort.call({
+    activeComposer: async () => composer,
+  }, page, CHATGPT_WEB_MODEL_ID, "max", {
+    localToolsEnabled: true,
+    solAvailable: true,
+    proAvailable: true,
+  }, async checkpoint => { checkpoints.push(checkpoint); });
+
+  expect(mode).toMatchObject({ displayLabel: "Pro", uiEffortIndex: 4 });
+  expect(checkpoints).toContain("effort-slider-visible");
+  expect(checkpoints).toContain("effort-selected");
+  expect(pressed).toEqual(["Escape"]);
 });
 
 test("effort slider ARIA state fails closed on malformed and unsupported ranges", () => {
@@ -1272,15 +1345,19 @@ test("effort menu waiting stops when ChatGPT reports an expired session", async 
   const composer = { locator: () => composerForm };
   const effortChoice = { waitFor: async () => await neverVisible };
   const effortChoices = { nth: () => effortChoice, count: async () => 3 };
+  const effortSlider = {
+    waitFor: async () => await neverVisible,
+  };
+  const effortSliders = {
+    last: () => effortSlider,
+    count: async () => 0,
+  };
   const effortMenu = {
     last() { return this; },
     isVisible: async () => true,
-    locator: () => effortChoices,
-  };
-  const effortSlider = {
-    filter() { return this; },
-    last() { return this; },
-    waitFor: async () => await neverVisible,
+    locator: (selector: string) => selector.includes("data-model-reasoning-effort-slider")
+      ? effortSliders
+      : effortChoices,
   };
   const sessionAlert = {
     filter() { return this; },
@@ -1309,7 +1386,6 @@ test("effort menu waiting stops when ChatGPT reports an expired session", async 
     locator: (selector: string) => {
       if (selector.includes('[role="alert"]')) return sessionAlert;
       if (selector.includes('[role="menu"]') || selector.includes("composer-intelligence-picker-content")) return effortMenu;
-      if (selector.includes("data-model-reasoning-effort-slider")) return effortSlider;
       if (selector.includes('[role="dialog"]')) return hiddenDialog;
       return effortMenu;
     },
