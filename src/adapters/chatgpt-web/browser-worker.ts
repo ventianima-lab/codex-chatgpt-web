@@ -1203,6 +1203,20 @@ export class ChatGptBrowserWorker {
     return await context.newPage();
   }
 
+  private async activateEffortControl(control: Locator, failureMessage: string): Promise<void> {
+    const activated = await control.evaluate((element) => {
+      if (!(element instanceof HTMLButtonElement)) return false;
+      if (element.getAttribute("aria-haspopup") !== "menu") return false;
+      element.click();
+      return true;
+    });
+    if (activated) return;
+    throw new ChatGptWebAdapterError(
+      failureMessage,
+      { status: 502, errorType: "server_error", code: "upstream_server_error", retryable: false },
+    );
+  }
+
   private async selectModelAndEffort(
     page: Page,
     modelId: string,
@@ -1226,7 +1240,8 @@ export class ChatGptBrowserWorker {
       await captureDiagnostic?.("luna-default-confirmed");
       return mode;
     }
-    const currentEffort = composerForm.locator(CHATGPT_EFFORT_CONTROL_SELECTOR).last();
+    const effortControls = composerForm.locator(CHATGPT_EFFORT_CONTROL_SELECTOR);
+    const currentEffort = effortControls.last();
     const effortWaitAbort = new AbortController();
     try {
       const ready = await Promise.race([
@@ -1243,16 +1258,27 @@ export class ChatGptBrowserWorker {
     }
     await settleChatGptUi();
     await throwIfChatGptRateLimitDialog(page);
+    const effortControlCount = await effortControls.filter({ visible: true }).count();
+    if (effortControlCount !== 1) {
+      throw new ChatGptWebAdapterError(
+        `ChatGPT exposed ${effortControlCount} visible model/effort controls; refusing ambiguous activation`,
+        { status: 502, errorType: "server_error", code: "upstream_server_error", retryable: false },
+      );
+    }
     await captureDiagnostic?.("effort-control-ready");
     const effortMenu = page.locator(CHATGPT_EFFORT_MENU_SELECTOR).last();
     const menuVisible = await effortMenu.isVisible().catch(() => false);
     const menuExpanded = await currentEffort.getAttribute("aria-expanded").catch(() => null);
     if (!menuVisible && menuExpanded !== "true") {
       await throwIfChatGptRateLimitDialog(page);
-      // ChatGPT's current Radix trigger no longer responds to synthetic Enter/Space on background
-      // Electron surfaces. Force only the exact, visible effort control; the menu/slider state
-      // below remains the authoritative postcondition, so this cannot become an unproved click.
-      await currentEffort.click({ force: true });
+      // Electron can report a 1x1 viewport for a composited background WebContentsView. Playwright
+      // then rejects even a forced click as outside the viewport. Activate the one unambiguous
+      // visible button in the document and keep the opened menu/slider as the authoritative
+      // postcondition, so background geometry cannot turn into an unproved selection.
+      await this.activateEffortControl(
+        currentEffort,
+        "ChatGPT model/effort control was not an activatable menu button",
+      );
     }
     await captureDiagnostic?.("effort-menu-open-requested");
     const effortChoices = effortMenu.locator(CHATGPT_EFFORT_ITEM_SELECTOR);
@@ -1351,7 +1377,10 @@ export class ChatGptBrowserWorker {
         const expanded = await currentEffort.getAttribute("aria-expanded").catch(() => null);
         if (expanded !== "true") {
           await throwIfChatGptRateLimitDialog(page);
-          await currentEffort.click({ force: true });
+          await this.activateEffortControl(
+            currentEffort,
+            "ChatGPT model/effort control could not reopen its menu",
+          );
         }
         await effortChoice.waitFor({
           state: "visible",
