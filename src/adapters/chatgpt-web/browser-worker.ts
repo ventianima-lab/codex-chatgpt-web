@@ -1207,7 +1207,20 @@ export class ChatGptBrowserWorker {
     const activated = await control.evaluate((element) => {
       if (!(element instanceof HTMLButtonElement)) return false;
       if (element.getAttribute("aria-haspopup") !== "menu") return false;
-      element.click();
+      // ChatGPT's current Radix trigger opens on pointerdown. HTMLElement.click() dispatches only
+      // a synthetic click, so it is ignored even though the same button is the one authoritative
+      // effort control. Dispatch the trigger event in-document to avoid Playwright's 1x1
+      // background viewport geometry while retaining the opened menu as the postcondition.
+      element.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+        buttons: 1,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }));
       return true;
     });
     if (activated) return;

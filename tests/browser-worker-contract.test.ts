@@ -1008,7 +1008,8 @@ test("effort selection handles the known ChatGPT rate-limit dialog before backgr
   expect(selectionSource).toContain("effortControlCount !== 1");
   expect(workerSource).toContain("element instanceof HTMLButtonElement");
   expect(workerSource).toContain('element.getAttribute("aria-haspopup") !== "menu"');
-  expect(workerSource).toContain("element.click()");
+  expect(workerSource).toContain('new PointerEvent("pointerdown"');
+  expect(workerSource).not.toContain("element.click()");
   expect(selectionSource).toContain('effortChoice.press("Enter")');
   expect(selectionSource).not.toContain("effortChoice.click(");
   expect(selectionSource).not.toContain("is unavailable");
