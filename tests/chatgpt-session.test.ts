@@ -31,12 +31,15 @@ test("login keeps the established turn composer contract", () => {
 });
 
 test("the effort selector identifies the model slider instead of any composer menu button", () => {
-  expect(CHATGPT_EFFORT_CONTROL_SELECTOR).toContain('[data-animated-slider-trigger="true"]');
-  expect(CHATGPT_EFFORT_CONTROL_SELECTOR).toContain(
-    'button[aria-haspopup="menu"][data-tone="neutral"]',
+  const selectors = CHATGPT_EFFORT_CONTROL_SELECTOR.split(",").map(selector => selector.trim());
+  expect(selectors).toContain(
+    'button[aria-haspopup="menu"][data-tone="neutral"]:has([data-animated-slider-trigger="true"])',
   );
-  expect(CHATGPT_EFFORT_CONTROL_SELECTOR).toContain('[data-testid="model-switcher-dropdown-button"]');
-  expect(CHATGPT_EFFORT_CONTROL_SELECTOR).not.toBe('button[aria-haspopup="menu"]');
+  expect(selectors).toContain(
+    'button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]',
+  );
+  expect(selectors).not.toContain('button[aria-haspopup="menu"][data-tone="neutral"]');
+  expect(selectors).not.toContain('button[aria-haspopup="menu"]');
 });
 
 test("a complete authenticated composer with no effort selector is Luna-only", async () => {

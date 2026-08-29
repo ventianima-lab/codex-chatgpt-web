@@ -10,7 +10,6 @@ export const CHATGPT_COMPOSER_SELECTOR = [
 ].join(", ");
 export const CHATGPT_EFFORT_CONTROL_SELECTOR = [
   'button[aria-haspopup="menu"][data-tone="neutral"]:has([data-animated-slider-trigger="true"])',
-  'button[aria-haspopup="menu"][data-tone="neutral"]',
   'button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]',
 ].join(", ");
 export const CHATGPT_EFFORT_MENU_SELECTOR = [
